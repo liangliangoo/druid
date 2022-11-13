@@ -15,50 +15,6 @@
  */
 package com.alibaba.druid.pool;
 
-import static com.alibaba.druid.util.Utils.getBoolean;
-
-import java.io.Closeable;
-import java.security.AccessController;
-import java.security.PrivilegedAction;
-import java.sql.Connection;
-import java.sql.SQLException;
-import java.sql.Statement;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.ConcurrentModificationException;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Properties;
-import java.util.ServiceLoader;
-import java.util.StringTokenizer;
-import java.util.TimeZone;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Future;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLongFieldUpdater;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
-
-import javax.management.JMException;
-import javax.management.MBeanRegistration;
-import javax.management.MBeanServer;
-import javax.management.ObjectName;
-import javax.naming.NamingException;
-import javax.naming.Reference;
-import javax.naming.Referenceable;
-import javax.naming.StringRefAddr;
-import javax.sql.ConnectionEvent;
-import javax.sql.ConnectionEventListener;
-import javax.sql.ConnectionPoolDataSource;
-import javax.sql.PooledConnection;
-
 import com.alibaba.druid.Constants;
 import com.alibaba.druid.DbType;
 import com.alibaba.druid.TransactionTimeoutException;
@@ -85,13 +41,35 @@ import com.alibaba.druid.stat.JdbcSqlStatValue;
 import com.alibaba.druid.support.clickhouse.BalancedClickhouseDriver;
 import com.alibaba.druid.support.logging.Log;
 import com.alibaba.druid.support.logging.LogFactory;
-import com.alibaba.druid.util.JMXUtils;
-import com.alibaba.druid.util.JdbcConstants;
-import com.alibaba.druid.util.JdbcUtils;
-import com.alibaba.druid.util.StringUtils;
-import com.alibaba.druid.util.Utils;
+import com.alibaba.druid.util.*;
 import com.alibaba.druid.wall.WallFilter;
 import com.alibaba.druid.wall.WallProviderStatValue;
+
+import javax.management.JMException;
+import javax.management.MBeanRegistration;
+import javax.management.MBeanServer;
+import javax.management.ObjectName;
+import javax.naming.NamingException;
+import javax.naming.Reference;
+import javax.naming.Referenceable;
+import javax.naming.StringRefAddr;
+import javax.sql.ConnectionEvent;
+import javax.sql.ConnectionEventListener;
+import javax.sql.ConnectionPoolDataSource;
+import javax.sql.PooledConnection;
+import java.io.Closeable;
+import java.security.AccessController;
+import java.security.PrivilegedAction;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicLongFieldUpdater;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
+
+import static com.alibaba.druid.util.Utils.getBoolean;
 
 /**
  * @author ljw [ljw2083@alibaba-inc.com]
@@ -116,15 +94,16 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
     private long                             activePeakTime            = 0;
     private int                              poolingPeak               = 0;
     private long                             poolingPeakTime           = 0;
-    // store
+    // store 这个就是我们经常说的连接池
     private volatile DruidConnectionHolder[] connections;
     private int                              poolingCount              = 0;
     private int                              activeCount               = 0;
     private volatile long                    discardCount              = 0;
     private int                              notEmptyWaitThreadCount   = 0;
     private int                              notEmptyWaitThreadPeak    = 0;
-    //
+    // 存放需要遗弃的连接
     private DruidConnectionHolder[]          evictConnections;
+    // 存放需要进行活性检查的连接
     private DruidConnectionHolder[]          keepAliveConnections;
 
     // threads
@@ -1049,6 +1028,9 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
         return false;
     }
 
+    /**
+     * 打印当前线程池相关信息
+     */
     private void createAndLogThread() {
         if (this.timeBetweenLogStatsMillis <= 0) {
             return;
@@ -1080,6 +1062,9 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
         destroyConnectionThread.start();
     }
 
+    /**
+     * 用于创建连接
+     */
     protected void createAndStartCreatorThread() {
         if (createScheduler == null) {
             String threadName = "Druid-ConnectionPool-Create-" + System.identityHashCode(this);
@@ -2769,8 +2754,9 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
 
                     if (emptyWait) {
                         // 必须存在线程等待，才创建连接
+                        // 可用连接数 >= 等待的用户线程数
                         if (poolingCount >= notEmptyWaitThreadCount //
-                                && (!(keepAlive && activeCount + poolingCount < minIdle))
+                                && (!(keepAlive && activeCount + poolingCount < minIdle)) // 连接池中有效的连接数要小于 minIdle 才会创建
                                 && !isFailContinuous()
                         ) {
                             empty.await();
@@ -2798,6 +2784,7 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
                 PhysicalConnectionInfo connection = null;
 
                 try {
+                    // jdbc 创建连接
                     connection = createPhysicalConnection();
                 } catch (SQLException e) {
                     LOG.error("create connection SQLException, url: " + jdbcUrl + ", errorCode " + e.getErrorCode()
@@ -2840,6 +2827,7 @@ public class DruidDataSource extends DruidAbstractDataSource implements DruidDat
                     continue;
                 }
 
+                // 将创建的连接放入到连接池中
                 boolean result = put(connection);
                 if (!result) {
                     JdbcUtils.close(connection.getPhysicalConnection());
